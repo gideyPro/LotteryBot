@@ -43,7 +43,10 @@ axios.post = async (url, payload, options) => {
 async function runTests() {
   console.log("=== Starting Local Mock Tests ===");
   
-  // 1. Init Database
+  // 1. Init Database (clear old JSON file if exists for clean test)
+  const { dbPath } = require('./database');
+  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  
   await initDb();
   console.log("✅ Database Initialized.");
 
