@@ -1,0 +1,23 @@
+{
+  "name": "lotterybot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --env-file=.env bot.js",
+    "test": "node mock-test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.20.0",
+    "cheerio": "^1.2.0",
+    "jimp": "^1.6.1",
+    "jsqr": "^1.4.0",
+    "sqlite3": "^6.0.1",
+    "telegraf": "^4.16.3",
+    "tesseract.js": "^7.0.0"
+  }
+}
