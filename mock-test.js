@@ -2,7 +2,7 @@
 process.env.NODE_ENV = 'test'; // Ensure bot doesn't start
 
 const { initDb, insertTransaction } = require('./database');
-const bot = require('./bot');
+const bot = require('./app');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
