@@ -9,7 +9,111 @@ const Tesseract = require('tesseract.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { initDb, insertTransaction, generateTicket } = require('./database');
+const { initDb, insertTransaction, generateTicket, Transaction } = require('./database');
+const express = require('express');
+const helmet = require('helmet');
+const webApp = express();
+
+webApp.use(helmet());
+webApp.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'");
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+webApp.get('/', async (req, res) => {
+  try {
+    const totalTx = await Transaction.countDocuments();
+    
+    const result = await Transaction.aggregate([
+      { $group: { _id: null, totalAmount: { $sum: "$amount" } } }
+    ]);
+    const totalAmount = result.length > 0 ? result[0].totalAmount : 0;
+    
+    const recentTx = await Transaction.find().sort({ timestamp: -1 }).limit(10);
+    
+    // Mask FT codes for security (PII Masking)
+    const secureTx = recentTx.map(tx => {
+      const ft = tx.transaction_ref;
+      const masked = ft ? (ft.substring(0, 3) + '***' + ft.substring(ft.length - 3)) : 'UNKNOWN';
+      return { maskedFt: masked, amount: tx.amount, ticket: tx.lottery_ticket, time: tx.timestamp };
+    });
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Wavemart Lottery Dashboard</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; color: #111827; padding: 2rem; margin: 0; }
+          .container { max-width: 1000px; margin: 0 auto; }
+          .header { text-align: center; margin-bottom: 2rem; }
+          .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+          .stat-card { background: white; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+          .stat-value { font-size: 2.5rem; font-weight: bold; color: #2563eb; }
+          .stat-label { font-size: 0.875rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.5rem; }
+          .table-container { background: white; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
+          th { background-color: #f9fafb; font-weight: 600; color: #374151; }
+          tr:hover { background-color: #f9fafb; }
+          .badge { background: #dcfce7; color: #166534; padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>LotteryBot Dashboard</h1>
+            <p>Real-time statistics for the Wavemart Lottery</p>
+          </div>
+          
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-value">${totalTx}</div>
+              <div class="stat-label">Total Tickets Issued</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${totalAmount.toLocaleString()} ETB</div>
+              <div class="stat-label">Total Revenue</div>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Transaction Ref</th>
+                  <th>Amount</th>
+                  <th>Lottery Ticket</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${secureTx.map(tx => `
+                  <tr>
+                    <td><span style="font-family: monospace;">${tx.maskedFt}</span></td>
+                    <td>${tx.amount} ETB</td>
+                    <td><strong>${tx.ticket}</strong></td>
+                    <td><span class="badge">Verified</span></td>
+                  </tr>
+                `).join('')}
+                ${secureTx.length === 0 ? '<tr><td colspan="4" style="text-align: center;">No transactions yet.</td></tr>' : ''}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+    res.send(html);
+  } catch (err) {
+    console.error("Dashboard Error:", err);
+    res.status(500).send("Internal Server Error");
+  }
+});
+
 
 // Ensure token is provided securely via environment variables
 const botToken = process.env.BOT_TOKEN;
@@ -330,6 +434,8 @@ bot.on('photo', async (ctx) => {
   }
 });
 
+const WEB_PORT = process.env.PORT || 8080;
+
 // Start initialization if not in test env
 if (process.env.NODE_ENV !== 'test') {
   initDb()
@@ -337,6 +443,10 @@ if (process.env.NODE_ENV !== 'test') {
       console.log("Database initialized.");
       bot.launch();
       console.log("Telegram Bot started.");
+      
+      webApp.listen(WEB_PORT, () => {
+        console.log("Web dashboard running on port " + WEB_PORT);
+      });
     })
     .catch(err => {
       console.error("Failed to initialize database:", err);
