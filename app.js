@@ -438,19 +438,19 @@ const WEB_PORT = process.env.PORT || 8080;
 
 // Start initialization if not in test env
 if (process.env.NODE_ENV !== 'test') {
-  initDb()
-    .then(() => {
-      console.log("Database initialized.");
-      bot.launch();
-      console.log("Telegram Bot started.");
-      
-      webApp.listen(WEB_PORT, () => {
-        console.log("Web dashboard running on port " + WEB_PORT);
-      });
-    })
-    .catch(err => {
-      console.error("Failed to initialize database:", err);
-    });
+  // Initialize DB asynchronously. Mongoose automatically buffers queries until connected.
+  initDb().catch(err => console.error("Failed to initialize database:", err));
+  
+  // Start the bot
+  bot.launch();
+  console.log("Telegram Bot started.");
+  
+  // Start web server immediately in the main event loop. 
+  // This is CRITICAL for cPanel/Plesk (Phusion Passenger) to correctly intercept the port 
+  // and route standard HTTPS traffic directly to the dashboard without port 8080.
+  webApp.listen(WEB_PORT, () => {
+    console.log("Web dashboard running on port " + WEB_PORT);
+  });
 }
 
 // Enable graceful stop
