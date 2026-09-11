@@ -239,20 +239,30 @@ async function processReceipt(imagePath, userId) {
     // NEW: Step 3B: Image API Verification via ShegerPay
     let imageVerification = await verifyImageWithShegerPay(imagePath);
     
-    // FOR TESTING: Just return all the extracted info back to the user!
     let responseMessage = `✅ Receipt Identified!\nFT Code: ${ftCode}\n`;
-    responseMessage += `💰 Actual Amount Paid (Our OCR): ${extractedAmount} ETB\n\n`;
+    responseMessage += `💰 Actual Amount Paid: ${extractedAmount} ETB\n\n`;
     
     if (verification.isValid) {
-      responseMessage += `📡 ShegerPay Standard API Response:\n${JSON.stringify(verification.rawData, null, 2)}\n\n`;
+      try {
+        const ticket = generateTicket();
+        await insertTransaction(ftCode, userId, extractedAmount, ticket);
+        responseMessage += `🎉 Success! Your payment was verified.\n🎫 Your Lottery Ticket: ${ticket}\n\n`;
+      } catch (dbErr) {
+        if (dbErr.code === 'SQLITE_CONSTRAINT') {
+          responseMessage += `⚠️ Warning: This receipt (${ftCode}) has already been used to claim a ticket!\n\n`;
+        } else {
+          responseMessage += `❌ Internal Database Error while saving your ticket.\n\n`;
+          console.error("DB Error:", dbErr);
+        }
+      }
     } else {
       responseMessage += `❌ ShegerPay Standard API Failed or Rejected it.\n\n`;
     }
 
     if (imageVerification.isValid) {
-      responseMessage += `📸 ShegerPay Image API Response:\n${JSON.stringify(imageVerification.rawData, null, 2)}\n\n`;
+      responseMessage += `📸 ShegerPay Image API: OK\n\n`;
     } else {
-      responseMessage += `📸 ShegerPay Image API Failed:\n${JSON.stringify(imageVerification.rawData, null, 2)}\n\n`;
+      responseMessage += `📸 ShegerPay Image API: Failed\n\n`;
     }
 
     if (!ocrText) ocrText = await performOCR(imagePath);

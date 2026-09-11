@@ -1,7 +1,8 @@
 // mock-test.js
+require('dotenv').config();
 process.env.NODE_ENV = 'test'; // Ensure bot doesn't start
 
-const { initDb, insertTransaction } = require('./database');
+const { initDb, insertTransaction, Transaction } = require('./database');
 const bot = require('./app');
 const axios = require('axios');
 const fs = require('fs');
@@ -43,11 +44,9 @@ axios.post = async (url, payload, options) => {
 async function runTests() {
   console.log("=== Starting Local Mock Tests ===");
   
-  // 1. Init Database (clear old JSON file if exists for clean test)
-  const { dbPath } = require('./database');
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-  
+  // 1. Init Database (clear old DB for clean test)
   await initDb();
+  await Transaction.deleteMany({});
   console.log("✅ Database Initialized.");
 
   // 2. Test ShegerPay API with dummy payload

@@ -17,6 +17,7 @@
     "dotenv": "^17.4.2",
     "jimp": "^1.6.1",
     "jsqr": "^1.4.0",
+    "mongoose": "^9.10.0",
     "telegraf": "^4.16.3",
     "tesseract.js": "^7.0.0"
   }

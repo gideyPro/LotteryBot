@@ -1,4 +1,4 @@
 node_modules/
 temp_downloads/
 lottery.db
-.env
+*.env

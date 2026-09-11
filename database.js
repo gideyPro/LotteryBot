@@ -1,21 +1,29 @@
-const fs = require('fs');
-const path = require('path');
+const mongoose = require('mongoose');
 
-const dbPath = path.resolve(__dirname, 'database.json');
-
-// Initialize database file if it doesn't exist
-function initDb() {
-  return new Promise((resolve, reject) => {
-    try {
-      if (!fs.existsSync(dbPath)) {
-        fs.writeFileSync(dbPath, JSON.stringify([], null, 2), 'utf8');
-      }
-      resolve();
-    } catch (err) {
-      reject(err);
+// Connect to MongoDB Atlas
+async function initDb() {
+  try {
+    if (!process.env.MONGODB_URI) {
+      throw new Error("MONGODB_URI is missing in .env");
     }
-  });
+    await mongoose.connect(process.env.MONGODB_URI);
+    console.log("Connected to MongoDB Atlas successfully.");
+  } catch (err) {
+    console.error("MongoDB Connection Error:", err);
+    throw err;
+  }
 }
+
+// Define the schema
+const transactionSchema = new mongoose.Schema({
+  transaction_ref: { type: String, required: true, unique: true },
+  user_id: { type: Number, required: true },
+  amount: { type: Number, required: true },
+  lottery_ticket: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now }
+});
+
+const Transaction = mongoose.model('Transaction', transactionSchema);
 
 /**
  * Inserts a transaction into the database
@@ -25,42 +33,25 @@ function initDb() {
  * @param {string} lotteryTicket 
  * @returns {Promise<void>}
  */
-function insertTransaction(transactionRef, userId, amount, lotteryTicket) {
-  return new Promise((resolve, reject) => {
-    try {
-      if (!fs.existsSync(dbPath)) {
-        // Create if missing just to be safe
-        fs.writeFileSync(dbPath, JSON.stringify([], null, 2), 'utf8');
-      }
-      
-      const data = fs.readFileSync(dbPath, 'utf8');
-      const transactions = JSON.parse(data || '[]');
-      
-      // Check for duplicate transaction_ref (simulate UNIQUE constraint)
-      const exists = transactions.some(t => t.transaction_ref === transactionRef);
-      if (exists) {
-        // Return a mock SQLITE_CONSTRAINT error to match previous behavior
-        const err = new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: transactions.transaction_ref');
-        err.code = 'SQLITE_CONSTRAINT';
-        return reject(err);
-      }
-      
-      const newTx = {
-        transaction_ref: transactionRef,
-        user_id: userId,
-        amount: amount,
-        lottery_ticket: lotteryTicket,
-        timestamp: new Date().toISOString()
-      };
-      
-      transactions.push(newTx);
-      
-      fs.writeFileSync(dbPath, JSON.stringify(transactions, null, 2), 'utf8');
-      resolve();
-    } catch (err) {
-      reject(err);
+async function insertTransaction(transactionRef, userId, amount, lotteryTicket) {
+  try {
+    const newTx = new Transaction({
+      transaction_ref: transactionRef,
+      user_id: userId,
+      amount: amount,
+      lottery_ticket: lotteryTicket
+    });
+    
+    await newTx.save();
+  } catch (err) {
+    if (err.code === 11000) {
+      // Simulate the SQLITE_CONSTRAINT for double spend backward compatibility
+      const error = new Error('SQLITE_CONSTRAINT: UNIQUE constraint failed: transactions.transaction_ref');
+      error.code = 'SQLITE_CONSTRAINT';
+      throw error;
     }
-  });
+    throw err;
+  }
 }
 
 function generateTicket() {
@@ -73,5 +64,5 @@ module.exports = {
   initDb,
   insertTransaction,
   generateTicket,
-  dbPath // Exporting path for tests
+  Transaction // Exported for mock tests to clear DB if needed
 };
