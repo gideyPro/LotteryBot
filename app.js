@@ -277,6 +277,8 @@ async function verifyWithVerifyET(ftCode, accountSuffix) {
     };
 
     console.log(`[VERIFY_ET] Verifying FT Code ${ftCode}...`);
+    console.log(`[VERIFY_ET] Payload:`, JSON.stringify(payload));
+    console.log(`[VERIFY_ET] API Key exists:`, !!apiKey);
     
     const response = await axios.post('https://verify.et/api/verify?waitMs=5000', payload, {
       headers: {
@@ -340,17 +342,18 @@ async function verifyWithVerifyET(ftCode, accountSuffix) {
     console.log(`[VERIFY_ET] ❌ Verification Failed:`, body.message);
     return { isValid: false, data: null, error: body.message };
   } catch (error) {
+    console.error("[VERIFY_ET] Full error:", JSON.stringify(error.response?.data || error.message, null, 2));
     if (error.response) {
-      console.error("[VERIFY_ET] API rejected the transaction:", error.response.data);
       // Handle specific error codes
       const errData = error.response.data;
-      if (errData.error?.code === 'not_found') {
+      const errorMsg = errData?.error?.message || errData?.message || JSON.stringify(errData);
+      if (errData?.error?.code === 'not_found') {
         return { isValid: false, data: null, error: 'Transaction not found. Please verify the FT code and try again.' };
       }
-      if (errData.error?.code === 'upstream_timeout') {
+      if (errData?.error?.code === 'upstream_timeout') {
         return { isValid: false, data: null, error: 'Verification timed out. Please try again.' };
       }
-      return { isValid: false, data: null, error: errData.message || errData.error?.message || 'Verification failed' };
+      return { isValid: false, data: null, error: errorMsg };
     }
     console.error("[VERIFY_ET] API connection error:", error.message);
     return { isValid: false, data: null, error: 'Connection error. Please try again.' };
@@ -431,6 +434,7 @@ async function processReceipt(imagePath, userId) {
 
     // Step 3: Verify with Verify.ET API
     const accountSuffix = await getSetting('cbe_account_suffix', '');
+    console.log(`[SCANNER] Account suffix from settings: "${accountSuffix}"`);
     if (!accountSuffix) {
       return "⚠️ CBE Account Suffix is not configured. Please set it in the dashboard settings.";
     }
@@ -479,7 +483,11 @@ async function processReceipt(imagePath, userId) {
         }
       }
     } else {
-      responseMessage += `❌ Verification Failed: ${verification.error || 'Unknown error'}\n`;
+      responseMessage += `❌ Verification Failed: ${verification.error || 'Unknown error'}\n\n`;
+      responseMessage += `🔧 Debug Info:\n`;
+      responseMessage += `FT Code: ${ftCode}\n`;
+      responseMessage += `Account Suffix: ${accountSuffix}\n`;
+      responseMessage += `API Key Set: ${!!process.env.VERIFY_ET_API_KEY}\n`;
     }
 
     return responseMessage;
