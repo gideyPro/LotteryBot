@@ -339,8 +339,11 @@ async function verifyWithVerifyET(ftCode, accountSuffix) {
       return formatVerifyResult(body.data[0]);
     }
 
+    // Debug: dump full response
+    console.log(`[VERIFY_ET] Response body:`, JSON.stringify(body, null, 2));
+    
     console.log(`[VERIFY_ET] ❌ Verification Failed:`, body.message);
-    return { isValid: false, data: null, error: body.message };
+    return { isValid: false, data: null, error: body.message || JSON.stringify(body) };
   } catch (error) {
     console.error("[VERIFY_ET] Full error:", JSON.stringify(error.response?.data || error.message, null, 2));
     if (error.response) {
@@ -488,6 +491,7 @@ async function processReceipt(imagePath, userId) {
       responseMessage += `FT Code: ${ftCode}\n`;
       responseMessage += `Account Suffix: ${accountSuffix}\n`;
       responseMessage += `API Key Set: ${!!process.env.VERIFY_ET_API_KEY}\n`;
+      responseMessage += `Full Response: ${JSON.stringify(verification)}`;
     }
 
     return responseMessage;
