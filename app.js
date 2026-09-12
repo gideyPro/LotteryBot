@@ -1,7 +1,6 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const FormData = require('form-data');
 const { Jimp } = require('jimp');
 const jsQR = require('jsqr');
 const Tesseract = require('tesseract.js');
@@ -31,12 +30,22 @@ webApp.get('/', async (req, res) => {
     
     const recentTx = await Transaction.find().sort({ timestamp: -1 }).limit(10);
     const currentAmount = await getSetting('lottery_amount', 100);
+    const currentSuffix = await getSetting('cbe_account_suffix', '');
     
     // Mask FT codes for security (PII Masking)
     const secureTx = recentTx.map(tx => {
       const ft = tx.transaction_ref;
       const masked = ft ? (ft.substring(0, 3) + '***' + ft.substring(ft.length - 3)) : 'UNKNOWN';
-      return { maskedFt: masked, amount: tx.amount, ticket: tx.lottery_ticket, time: tx.timestamp };
+      return {
+        maskedFt: masked,
+        amount: tx.amount,
+        sender: tx.sender_name || 'N/A',
+        receiver: tx.receiver_name || 'N/A',
+        receiverAccount: tx.receiver_account || 'N/A',
+        settlementMatch: tx.settlement_matched,
+        ticket: tx.lottery_ticket,
+        time: tx.timestamp
+      };
     });
 
     const html = `
@@ -93,11 +102,17 @@ webApp.get('/', async (req, res) => {
           <div class="settings-card">
             <h3>Settings</h3>
             ${req.query.saved === '1' ? '<div class="msg msg-ok">Settings saved successfully.</div>' : ''}
-            ${req.query.error ? '<div class="msg msg-err">Invalid amount. Please enter a positive number.</div>' : ''}
+            ${req.query.error ? '<div class="msg msg-err">Invalid value. Please check your input.</div>' : ''}
             <form method="POST" action="/settings">
               <div class="settings-row">
                 <label for="amount">Lottery Amount (ETB)</label>
                 <input type="number" id="amount" name="amount" value="${currentAmount}" min="1" step="any" required>
+              </div>
+              <div class="settings-row" style="margin-top: 0.75rem;">
+                <label for="suffix">CBE Account Suffix</label>
+                <input type="text" id="suffix" name="cbe_account_suffix" value="${currentSuffix}" placeholder="8 digits" pattern="[0-9]{8}" maxlength="8" required>
+              </div>
+              <div class="settings-row" style="margin-top: 1rem;">
                 <button type="submit">Save</button>
               </div>
             </form>
@@ -108,21 +123,25 @@ webApp.get('/', async (req, res) => {
               <thead>
                 <tr>
                   <th>Transaction Ref</th>
+                  <th>Sender</th>
+                  <th>Receiver</th>
                   <th>Amount</th>
+                  <th>Match</th>
                   <th>Lottery Ticket</th>
-                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 ${secureTx.map(tx => `
                   <tr>
                     <td><span style="font-family: monospace;">${tx.maskedFt}</span></td>
+                    <td>${tx.sender}</td>
+                    <td>${tx.receiver}</td>
                     <td>${tx.amount} ETB</td>
+                    <td>${tx.settlementMatch ? '<span class="badge">Matched</span>' : '<span style="color: #dc2626; font-weight: 600;">Mismatch</span>'}</td>
                     <td><strong>${tx.ticket}</strong></td>
-                    <td><span class="badge">Verified</span></td>
                   </tr>
                 `).join('')}
-                ${secureTx.length === 0 ? '<tr><td colspan="4" style="text-align: center;">No transactions yet.</td></tr>' : ''}
+                ${secureTx.length === 0 ? '<tr><td colspan="6" style="text-align: center;">No transactions yet.</td></tr>' : ''}
               </tbody>
             </table>
           </div>
@@ -142,10 +161,17 @@ webApp.use(express.urlencoded({ extended: false }));
 webApp.post('/settings', async (req, res) => {
   try {
     const amount = parseFloat(req.body.amount);
+    const suffix = req.body.cbe_account_suffix?.trim();
+    
     if (isNaN(amount) || amount <= 0) {
       return res.redirect('/?error=invalid');
     }
+    if (!suffix || !/^\d{8}$/.test(suffix)) {
+      return res.redirect('/?error=invalid_suffix');
+    }
+    
     await setSetting('lottery_amount', amount);
+    await setSetting('cbe_account_suffix', suffix);
     res.redirect('/?saved=1');
   } catch (err) {
     console.error("Settings Error:", err);
@@ -231,98 +257,145 @@ function extractFTCode(text) {
 }
 
 /**
- * Verifies the receipt using the ShegerPay REST API.
+ * Verifies the receipt using Verify.ET API.
  * @param {string} ftCode 
- * @param {number} amount
- * @returns {Promise<{isValid: boolean, amount: number}>}
+ * @param {string} accountSuffix - 8-digit CBE account suffix
+ * @returns {Promise<{isValid: boolean, data: object}>}
  */
-async function verifyWithShegerPay(ftCode, amount) {
+async function verifyWithVerifyET(ftCode, accountSuffix) {
   try {
-    const apiKey = process.env.SHEGERPAY_API_KEY;
+    const apiKey = process.env.VERIFY_ET_API_KEY;
     if (!apiKey && process.env.NODE_ENV !== 'test') {
-      console.warn("WARNING: SHEGERPAY_API_KEY is not set!");
+      console.warn("WARNING: VERIFY_ET_API_KEY is not set!");
     }
 
+    const idempotencyKey = `lottery_${ftCode}_${Date.now()}`;
     const payload = {
-      provider: "cbe",
-      transaction_id: ftCode,
-      amount: amount
+      bank: "cbe",
+      referenceNumber: ftCode,
+      accountSuffix: accountSuffix
     };
 
-    console.log(`[SHEGERPAY] Verifying FT Code ${ftCode} for ${amount} ETB...`);
+    console.log(`[VERIFY_ET] Verifying FT Code ${ftCode}...`);
     
-    const response = await axios.post('https://api.shegerpay.com/api/v1/verify', payload, {
+    const response = await axios.post('https://verify.et/api/verify?waitMs=5000', payload, {
       headers: {
-        'X-API-Key': apiKey || 'mock_key',
-        'Content-Type': 'application/json'
+        'x-api-key': apiKey || 'mock_key',
+        'Content-Type': 'application/json',
+        'Idempotency-Key': idempotencyKey
       },
-      timeout: 10000
+      timeout: 15000
     });
 
-    // Assume ShegerPay returns { verified: true, data: { amount: 100 } }
-    // Adjust based on actual ShegerPay JSON structure
-    if (response.data && response.data.verified === true) {
-       console.log(`[SHEGERPAY] ✅ Verification Successful for ${ftCode}`);
-       return { isValid: true, amount: amount, rawData: response.data }; 
-    } else {
-       console.log(`[SHEGERPAY] ❌ Verification Failed:`, response.data);
-       return { isValid: false, amount: 0, rawData: response.data };
+    const body = response.data;
+    
+    // Handle queued response (202) - persist requestId and poll
+    if (response.status === 202 || (body.verification && body.verification.processingStatus === 'queued')) {
+      console.log(`[VERIFY_ET] Request queued (requestId: ${body.requestId}), polling...`);
+      const requestId = body.requestId;
+      const pollAfterMs = body.links?.pollAfterMs || 1500;
+      
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, pollAfterMs));
+        
+        try {
+          const pollRes = await axios.get(`https://verify.et/api/verify/${requestId}`, {
+            headers: { 
+              'x-api-key': apiKey || 'mock_key',
+              'Accept': 'application/json'
+            },
+            timeout: 10000
+          });
+          
+          const pollBody = pollRes.data;
+          const status = pollBody.data || pollBody.verification;
+          
+          if (status.processingStatus === 'completed' || status.processingStatus === 'failed') {
+            // Return the verification data from polling
+            const verificationResult = pollBody.verification || status;
+            return formatVerifyResult(verificationResult);
+          }
+          
+          // Honor Retry-After header if present
+          const retryAfter = pollRes.headers['retry-after'];
+          if (retryAfter) {
+            await new Promise(r => setTimeout(r, parseInt(retryAfter) * 1000));
+          }
+        } catch (pollErr) {
+          console.error(`[VERIFY_ET] Poll error (attempt ${i + 1}):`, pollErr.message);
+          if (pollErr.response?.status === 429) {
+            const retryAfter = pollErr.response.headers['retry-after'] || 5;
+            await new Promise(r => setTimeout(r, parseInt(retryAfter) * 1000));
+          }
+        }
+      }
+      return { isValid: false, data: null, error: 'Polling timed out', requestId };
     }
+
+    // Handle immediate response (200)
+    if (body.success && body.data && body.data.length > 0) {
+      return formatVerifyResult(body.data[0]);
+    }
+
+    console.log(`[VERIFY_ET] ❌ Verification Failed:`, body.message);
+    return { isValid: false, data: null, error: body.message };
   } catch (error) {
-    // If it's a 4xx error, the verification failed
     if (error.response) {
-      console.error("[SHEGERPAY] API rejected the transaction:", error.response.data);
-    } else {
-      console.error("[SHEGERPAY] API connection error:", error.message);
+      console.error("[VERIFY_ET] API rejected the transaction:", error.response.data);
+      // Handle specific error codes
+      const errData = error.response.data;
+      if (errData.error?.code === 'not_found') {
+        return { isValid: false, data: null, error: 'Transaction not found. Please verify the FT code and try again.' };
+      }
+      if (errData.error?.code === 'upstream_timeout') {
+        return { isValid: false, data: null, error: 'Verification timed out. Please try again.' };
+      }
+      return { isValid: false, data: null, error: errData.message || errData.error?.message || 'Verification failed' };
     }
-    return { isValid: false, amount: 0 };
+    console.error("[VERIFY_ET] API connection error:", error.message);
+    return { isValid: false, data: null, error: 'Connection error. Please try again.' };
   }
 }
 
 /**
- * Verifies the receipt image directly with ShegerPay's OCR.
- * @param {string} imagePath
- * @returns {Promise<{isValid: boolean, rawData: any}>}
+ * Format Verify.ET response into normalized structure
+ * Handles both direct verification data and queued verification results
  */
-async function verifyImageWithShegerPay(imagePath) {
-  try {
-    const apiKey = process.env.SHEGERPAY_API_KEY;
-    if (!apiKey && process.env.NODE_ENV !== 'test') {
-      console.warn("WARNING: SHEGERPAY_API_KEY is not set!");
+function formatVerifyResult(verificationData) {
+  const settlementMatch = verificationData.settlementAccountMatch;
+  const confirmationHistory = verificationData.confirmationHistory;
+  
+  const result = {
+    isValid: verificationData.verified === true,
+    data: {
+      senderName: verificationData.senderName || '',
+      receiverName: verificationData.receiverName || '',
+      receiverAccount: verificationData.receiverAccount || '',
+      verifiedAmount: verificationData.amount || 0,
+      txTimestamp: verificationData.timestamp || '',
+      settlementMatched: settlementMatch ? settlementMatch.matched === true : false,
+      matchReason: settlementMatch ? settlementMatch.reason : '',
+      status: verificationData.status || '',
+      currency: verificationData.currency || 'ETB',
+      confirmedBefore: confirmationHistory ? confirmationHistory.confirmedBefore === true : false,
+      confirmationCount: confirmationHistory ? confirmationHistory.confirmationCount || 0 : 0
     }
-
-    const form = new FormData();
-    form.append('provider', 'cbe');
-    form.append('screenshot', fs.createReadStream(imagePath));
-
-    console.log(`[SHEGERPAY] Sending Image to /verify-image (multipart)...`);
-    
-    // Some APIs might take too long for image processing, so bump timeout
-    const response = await axios.post('https://api.shegerpay.com/api/v1/verify-image', form, {
-      headers: {
-        'X-API-Key': apiKey || 'mock_key',
-        ...form.getHeaders()
-      },
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 30000 
-    });
-
-    if (response.data && response.data.verified === true) {
-       console.log(`[SHEGERPAY] ✅ Image Verification Successful`);
-       return { isValid: true, rawData: response.data }; 
-    } else {
-       console.log(`[SHEGERPAY] ❌ Image Verification Failed:`, response.data);
-       return { isValid: false, rawData: response.data };
+  };
+  
+  if (result.isValid) {
+    console.log(`[VERIFY_ET] ✅ Verification Successful`);
+    console.log(`[VERIFY_ET] Sender: ${result.data.senderName}`);
+    console.log(`[VERIFY_ET] Receiver: ${result.data.receiverName} (${result.data.receiverAccount})`);
+    console.log(`[VERIFY_ET] Amount: ${result.data.verifiedAmount} ${result.data.currency}`);
+    console.log(`[VERIFY_ET] Settlement Match: ${result.data.settlementMatched}`);
+    if (result.data.confirmedBefore) {
+      console.log(`[VERIFY_ET] ⚠️ Duplicate confirmation detected (count: ${result.data.confirmationCount})`);
     }
-  } catch (error) {
-    if (error.response) {
-      console.error("[SHEGERPAY] Image API rejected the transaction:", error.response.data);
-    } else {
-      console.error("[SHEGERPAY] Image API connection error:", error.message);
-    }
-    return { isValid: false, rawData: error.response ? error.response.data : null };
+  } else {
+    console.log(`[VERIFY_ET] ❌ Verification Failed:`, verificationData.status);
   }
+  
+  return result;
 }
 
 /**
@@ -334,17 +407,15 @@ async function verifyImageWithShegerPay(imagePath) {
 async function processReceipt(imagePath, userId) {
   try {
     let ftCode = null;
-    let scrapeUrl = null;
     let ocrText = null;
 
-    // Step 2A: QR Scan
+    // Step 1: QR Scan
     const qrData = await scanQRCode(imagePath);
     if (qrData) {
-      scrapeUrl = qrData;
       ftCode = extractFTCode(qrData);
     }
 
-    // Step 2B: OCR Fallback
+    // Step 2: OCR Fallback
     if (!ftCode) {
       ocrText = await performOCR(imagePath);
       if (ocrText) {
@@ -358,61 +429,59 @@ async function processReceipt(imagePath, userId) {
     
     console.log(`[SCANNER] Extracted FT Code: ${ftCode}`);
 
-    // Ensure we always have OCR text so we can extract the amount and account
-    if (!ocrText) {
-      ocrText = await performOCR(imagePath);
-    }
-    
-    // Extract actual amount from OCR
-    let extractedAmount = await getSetting('lottery_amount', 100); // default from settings
-    if (ocrText) {
-        const amountMatch = ocrText.match(/ETB\s*([\d,]+(?:\.\d+)?)\s*has been debited/i) || 
-                            ocrText.match(/ETB\s*([\d,]+(?:\.\d+)?)\s*transfer/i) ||
-                            ocrText.match(/transferred\s*ETB\s*([\d,]+(?:\.\d+)?)/i) ||
-                            ocrText.match(/amount.*?(?:ETB)?\s*([\d,]+(?:\.\d+)?)/i);
-        if (amountMatch) {
-            extractedAmount = parseFloat(amountMatch[1].replace(/,/g, ''));
-            console.log(`[SCANNER] Extracted Amount: ${extractedAmount}`);
-        }
+    // Step 3: Verify with Verify.ET API
+    const accountSuffix = await getSetting('cbe_account_suffix', '');
+    if (!accountSuffix) {
+      return "⚠️ CBE Account Suffix is not configured. Please set it in the dashboard settings.";
     }
 
-    // Step 3: API Verification via ShegerPay
-    let verification = await verifyWithShegerPay(ftCode, extractedAmount);
-    
-    // NEW: Step 3B: Image API Verification via ShegerPay
-    let imageVerification = await verifyImageWithShegerPay(imagePath);
+    const verification = await verifyWithVerifyET(ftCode, accountSuffix);
     
     let responseMessage = `✅ Receipt Identified!\nFT Code: ${ftCode}\n`;
-    responseMessage += `💰 Actual Amount Paid: ${extractedAmount} ETB\n\n`;
     
     if (verification.isValid) {
+      const vd = verification.data;
+      
+      // Check for duplicate confirmation
+      if (vd.confirmedBefore) {
+        responseMessage += `⚠️ Warning: This transaction has been confirmed before (${vd.confirmationCount} times).\n`;
+      }
+      
+      // Check settlement match (receiver validation)
+      if (!vd.settlementMatched) {
+        responseMessage += `⚠️ Warning: Receiver does not match expected account.\n`;
+        responseMessage += `   Received by: ${vd.receiverName} (${vd.receiverAccount})\n\n`;
+      }
+      
+      responseMessage += `👤 Sender: ${vd.senderName}\n`;
+      responseMessage += `🏦 Receiver: ${vd.receiverName} (${vd.receiverAccount})\n`;
+      responseMessage += `💰 Amount: ${vd.verifiedAmount} ${vd.currency}\n`;
+      responseMessage += `📅 Time: ${vd.txTimestamp}\n`;
+      responseMessage += `🔒 Settlement Match: ${vd.settlementMatched ? '✅ Yes' : '⚠️ No'}\n\n`;
+      
       try {
         const ticket = generateTicket();
-        await insertTransaction(ftCode, userId, extractedAmount, ticket);
-        responseMessage += `🎉 Success! Your payment was verified.\n🎫 Your Lottery Ticket: ${ticket}\n\n`;
+        await insertTransaction(ftCode, userId, vd.verifiedAmount, ticket, {
+          senderName: vd.senderName,
+          receiverName: vd.receiverName,
+          receiverAccount: vd.receiverAccount,
+          verifiedAmount: vd.verifiedAmount,
+          txTimestamp: vd.txTimestamp,
+          settlementMatched: vd.settlementMatched
+        });
+        responseMessage += `🎉 Success! Your payment was verified.\n🎫 Your Lottery Ticket: ${ticket}\n`;
       } catch (dbErr) {
         if (dbErr.code === 'SQLITE_CONSTRAINT') {
-          responseMessage += `⚠️ Warning: This receipt (${ftCode}) has already been used to claim a ticket!\n\n`;
+          responseMessage += `⚠️ Warning: This receipt (${ftCode}) has already been used to claim a ticket!\n`;
         } else {
-          responseMessage += `❌ Internal Database Error while saving your ticket.\n\n`;
+          responseMessage += `❌ Internal Database Error while saving your ticket.\n`;
           console.error("DB Error:", dbErr);
         }
       }
     } else {
-      responseMessage += `❌ ShegerPay Standard API Failed or Rejected it.\n\n`;
+      responseMessage += `❌ Verification Failed: ${verification.error || 'Unknown error'}\n`;
     }
 
-    if (imageVerification.isValid) {
-      responseMessage += `📸 ShegerPay Image API: OK\n\n`;
-    } else {
-      responseMessage += `📸 ShegerPay Image API: Failed\n\n`;
-    }
-
-    if (!ocrText) ocrText = await performOCR(imagePath);
-    
-    // In Telegram, messages can't be extremely long, so we truncate OCR if it's too huge, but usually receipts are small.
-    responseMessage += `📝 Raw OCR Text Extracted:\n${ocrText.substring(0, 1500)}`;
-    
     return responseMessage;
 
   } catch (err) {
@@ -496,4 +565,4 @@ if (process.env.NODE_ENV !== 'test') {
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-module.exports = { processReceipt, verifyWithShegerPay, verifyImageWithShegerPay };
+module.exports = { processReceipt, verifyWithVerifyET };

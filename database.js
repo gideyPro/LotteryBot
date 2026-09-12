@@ -19,6 +19,12 @@ const transactionSchema = new mongoose.Schema({
   transaction_ref: { type: String, required: true, unique: true },
   user_id: { type: Number, required: true },
   amount: { type: Number, required: true },
+  sender_name: { type: String, default: '' },
+  receiver_name: { type: String, default: '' },
+  receiver_account: { type: String, default: '' },
+  verified_amount: { type: Number, default: 0 },
+  tx_timestamp: { type: String, default: '' },
+  settlement_matched: { type: Boolean, default: false },
   lottery_ticket: { type: String, required: true },
   timestamp: { type: Date, default: Date.now }
 });
@@ -48,14 +54,21 @@ async function setSetting(key, value) {
  * @param {number} userId 
  * @param {number} amount 
  * @param {string} lotteryTicket 
+ * @param {object} verifyData - Verify.ET response data
  * @returns {Promise<void>}
  */
-async function insertTransaction(transactionRef, userId, amount, lotteryTicket) {
+async function insertTransaction(transactionRef, userId, amount, lotteryTicket, verifyData = {}) {
   try {
     const newTx = new Transaction({
       transaction_ref: transactionRef,
       user_id: userId,
       amount: amount,
+      sender_name: verifyData.senderName || '',
+      receiver_name: verifyData.receiverName || '',
+      receiver_account: verifyData.receiverAccount || '',
+      verified_amount: verifyData.verifiedAmount || amount,
+      tx_timestamp: verifyData.txTimestamp || '',
+      settlement_matched: verifyData.settlementMatched || false,
       lottery_ticket: lotteryTicket
     });
     
