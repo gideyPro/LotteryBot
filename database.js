@@ -25,6 +25,23 @@ const transactionSchema = new mongoose.Schema({
 
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
+// Settings schema for dashboard config
+const settingsSchema = new mongoose.Schema({
+  key: { type: String, required: true, unique: true },
+  value: { type: mongoose.Schema.Types.Mixed, required: true }
+});
+
+const Settings = mongoose.model('Settings', settingsSchema);
+
+async function getSetting(key, defaultValue) {
+  const doc = await Settings.findOne({ key });
+  return doc ? doc.value : defaultValue;
+}
+
+async function setSetting(key, value) {
+  await Settings.findOneAndUpdate({ key }, { value }, { upsert: true });
+}
+
 /**
  * Inserts a transaction into the database
  * @param {string} transactionRef 
@@ -64,5 +81,8 @@ module.exports = {
   initDb,
   insertTransaction,
   generateTicket,
-  Transaction // Exported for mock tests to clear DB if needed
+  Transaction,
+  Settings,
+  getSetting,
+  setSetting
 };

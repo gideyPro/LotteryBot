@@ -8,7 +8,7 @@ const Tesseract = require('tesseract.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { initDb, insertTransaction, generateTicket, Transaction } = require('./database');
+const { initDb, insertTransaction, generateTicket, Transaction, getSetting, setSetting } = require('./database');
 const express = require('express');
 const helmet = require('helmet');
 const webApp = express();
@@ -30,6 +30,7 @@ webApp.get('/', async (req, res) => {
     const totalAmount = result.length > 0 ? result[0].totalAmount : 0;
     
     const recentTx = await Transaction.find().sort({ timestamp: -1 }).limit(10);
+    const currentAmount = await getSetting('lottery_amount', 100);
     
     // Mask FT codes for security (PII Masking)
     const secureTx = recentTx.map(tx => {
@@ -59,6 +60,16 @@ webApp.get('/', async (req, res) => {
           th { background-color: #f9fafb; font-weight: 600; color: #374151; }
           tr:hover { background-color: #f9fafb; }
           .badge { background: #dcfce7; color: #166534; padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+          .settings-card { background: white; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+          .settings-card h3 { margin-top: 0; margin-bottom: 1rem; color: #374151; }
+          .settings-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+          .settings-row label { font-weight: 600; color: #374151; min-width: 120px; }
+          .settings-row input[type="number"] { padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; border-radius: 0.375rem; font-size: 1rem; width: 150px; }
+          .settings-row button { padding: 0.5rem 1.25rem; background: #2563eb; color: white; border: none; border-radius: 0.375rem; font-size: 0.875rem; font-weight: 600; cursor: pointer; }
+          .settings-row button:hover { background: #1d4ed8; }
+          .msg { padding: 0.5rem 1rem; border-radius: 0.375rem; margin-bottom: 1rem; font-size: 0.875rem; }
+          .msg-ok { background: #dcfce7; color: #166534; }
+          .msg-err { background: #fee2e2; color: #991b1b; }
         </style>
       </head>
       <body>
@@ -77,6 +88,19 @@ webApp.get('/', async (req, res) => {
               <div class="stat-value">${totalAmount.toLocaleString()} ETB</div>
               <div class="stat-label">Total Revenue</div>
             </div>
+          </div>
+
+          <div class="settings-card">
+            <h3>Settings</h3>
+            ${req.query.saved === '1' ? '<div class="msg msg-ok">Settings saved successfully.</div>' : ''}
+            ${req.query.error ? '<div class="msg msg-err">Invalid amount. Please enter a positive number.</div>' : ''}
+            <form method="POST" action="/settings">
+              <div class="settings-row">
+                <label for="amount">Lottery Amount (ETB)</label>
+                <input type="number" id="amount" name="amount" value="${currentAmount}" min="1" step="any" required>
+                <button type="submit">Save</button>
+              </div>
+            </form>
           </div>
 
           <div class="table-container">
@@ -110,6 +134,22 @@ webApp.get('/', async (req, res) => {
   } catch (err) {
     console.error("Dashboard Error:", err);
     res.status(500).send("Internal Server Error");
+  }
+});
+
+webApp.use(express.urlencoded({ extended: false }));
+
+webApp.post('/settings', async (req, res) => {
+  try {
+    const amount = parseFloat(req.body.amount);
+    if (isNaN(amount) || amount <= 0) {
+      return res.redirect('/?error=invalid');
+    }
+    await setSetting('lottery_amount', amount);
+    res.redirect('/?saved=1');
+  } catch (err) {
+    console.error("Settings Error:", err);
+    res.redirect('/?error=1');
   }
 });
 
@@ -324,7 +364,7 @@ async function processReceipt(imagePath, userId) {
     }
     
     // Extract actual amount from OCR
-    let extractedAmount = 100.00; // default
+    let extractedAmount = await getSetting('lottery_amount', 100); // default from settings
     if (ocrText) {
         const amountMatch = ocrText.match(/ETB\s*([\d,]+(?:\.\d+)?)\s*has been debited/i) || 
                             ocrText.match(/ETB\s*([\d,]+(?:\.\d+)?)\s*transfer/i) ||
