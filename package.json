@@ -13,10 +13,9 @@
   "type": "commonjs",
   "dependencies": {
     "axios": "^1.20.0",
-    "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
-    "ejs": "^6.0.1",
     "express": "^5.2.1",
+    "form-data": "^4.0.0",
     "helmet": "^8.3.0",
     "jimp": "^1.6.1",
     "jsqr": "^1.4.0",

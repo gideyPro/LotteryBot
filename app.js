@@ -2,7 +2,6 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
 const FormData = require('form-data');
-const cheerio = require('cheerio');
 const { Jimp } = require('jimp');
 const jsQR = require('jsqr');
 const Tesseract = require('tesseract.js');
