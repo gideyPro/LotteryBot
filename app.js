@@ -550,7 +550,7 @@ bot.on('photo', async (ctx) => {
 });
 
 bot.command('start', (ctx) => {
-  ctx.reply("👋 *Welcome to Wavemart Lottery!*\n\nTo participate, simply upload a clear screenshot of your bank receipt \\(CBE, Telebirr, etc\\.\\)\\.\n\nOur secure system will automatically verify your payment and issue your lottery ticket\\!", { parse_mode: 'MarkdownV2' });
+  ctx.reply("👋 *Welcome to Wavemart Lottery\\!*\n\nTo participate, simply upload a clear screenshot of your bank receipt \\(CBE, Telebirr, etc\\.\\)\\.\n\nOur secure system will automatically verify your payment and issue your lottery ticket\\!", { parse_mode: 'MarkdownV2' });
 });
 
 const WEB_PORT = process.env.PORT || 8080;
