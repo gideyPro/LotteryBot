@@ -7,17 +7,27 @@ const Tesseract = require('tesseract.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { initDb, insertTransaction, generateTicket, Transaction, getSetting, setSetting } = require('./database');
+const { initDb, insertTransaction, generateTicket, Transaction } = require('./database');
 const express = require('express');
 const helmet = require('helmet');
 const webApp = express();
 
 webApp.use(helmet());
 webApp.use((req, res, next) => {
-  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'");
   res.setHeader('Cache-Control', 'no-store');
   next();
 });
+
+// XSS Prevention Helper
+function escapeHTML(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 webApp.get('/', async (req, res) => {
   try {
@@ -29,22 +39,21 @@ webApp.get('/', async (req, res) => {
     const totalAmount = result.length > 0 ? result[0].totalAmount : 0;
     
     const recentTx = await Transaction.find().sort({ timestamp: -1 }).limit(10);
-    const currentAmount = await getSetting('lottery_amount', 100);
-    const currentSuffix = await getSetting('cbe_account_suffix', '');
+    const currentAmount = process.env.LOTTERY_AMOUNT || 100;
     
-    // Mask FT codes for security (PII Masking)
+    // Mask references for security (PII Masking)
     const secureTx = recentTx.map(tx => {
-      const ft = tx.transaction_ref;
-      const masked = ft ? (ft.substring(0, 3) + '***' + ft.substring(ft.length - 3)) : 'UNKNOWN';
+      const ref = tx.transaction_ref;
+      const masked = ref && ref.length > 6 ? (ref.substring(0, 3) + '***' + ref.substring(ref.length - 3)) : 'UNKNOWN';
       return {
-        maskedFt: masked,
-        amount: tx.amount,
-        sender: tx.sender_name || 'N/A',
-        receiver: tx.receiver_name || 'N/A',
-        receiverAccount: tx.receiver_account || 'N/A',
+        maskedRef: escapeHTML(masked),
+        amount: escapeHTML(tx.amount),
+        sender: escapeHTML(tx.sender_name || 'N/A'),
+        receiver: escapeHTML(tx.receiver_name || 'N/A'),
+        receiverAccount: escapeHTML(tx.receiver_account || 'N/A'),
         settlementMatch: tx.settlement_matched,
-        ticket: tx.lottery_ticket,
-        time: tx.timestamp
+        ticket: escapeHTML(tx.lottery_ticket),
+        time: escapeHTML(new Date(tx.timestamp).toLocaleString())
       };
     });
 
@@ -54,96 +63,169 @@ webApp.get('/', async (req, res) => {
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Wavemart Lottery Dashboard</title>
+        <title>Wavemart Enterprise Dashboard</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
         <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; color: #111827; padding: 2rem; margin: 0; }
-          .container { max-width: 1000px; margin: 0 auto; }
-          .header { text-align: center; margin-bottom: 2rem; }
-          .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
-          .stat-card { background: white; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
-          .stat-value { font-size: 2.5rem; font-weight: bold; color: #2563eb; }
-          .stat-label { font-size: 0.875rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.5rem; }
-          .table-container { background: white; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
+          :root {
+            --primary: #6366f1;
+            --primary-light: #818cf8;
+            --bg-gradient-start: #0f172a;
+            --bg-gradient-end: #1e1b4b;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+          }
+          body { 
+            font-family: 'Inter', sans-serif; 
+            background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
+            color: var(--text-main); 
+            padding: 2rem; 
+            margin: 0; 
+            min-height: 100vh;
+          }
+          .container { max-width: 1100px; margin: 0 auto; }
+          .header { 
+            text-align: center; 
+            margin-bottom: 3rem; 
+            animation: fadeInDown 0.8s ease;
+          }
+          .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+          }
+          .header p { color: var(--text-muted); font-size: 1.1rem; }
+          
+          .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 1rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+          }
+          
+          .stats-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+            gap: 1.5rem; 
+            margin-bottom: 3rem; 
+          }
+          .stat-card { 
+            padding: 2rem; 
+            text-align: center; 
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+          }
+          .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
+            border-color: rgba(255,255,255,0.2);
+          }
+          .stat-value { 
+            font-size: 3rem; 
+            font-weight: 700; 
+            background: linear-gradient(to right, #38bdf8, #818cf8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+          }
+          .stat-label { 
+            font-size: 0.9rem; 
+            color: var(--text-muted); 
+            text-transform: uppercase; 
+            letter-spacing: 0.1em; 
+            margin-top: 0.75rem; 
+          }
+          
+          .table-container { 
+            overflow-x: auto; 
+            padding: 1rem;
+          }
+          .table-header {
+            padding: 1rem 1.5rem;
+            font-size: 1.25rem;
+            font-weight: 600;
+            border-bottom: 1px solid var(--glass-border);
+          }
           table { width: 100%; border-collapse: collapse; }
-          th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
-          th { background-color: #f9fafb; font-weight: 600; color: #374151; }
-          tr:hover { background-color: #f9fafb; }
-          .badge { background: #dcfce7; color: #166534; padding: 0.25rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
-          .settings-card { background: white; padding: 1.5rem; border-radius: 0.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; }
-          .settings-card h3 { margin-top: 0; margin-bottom: 1rem; color: #374151; }
-          .settings-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
-          .settings-row label { font-weight: 600; color: #374151; min-width: 120px; }
-          .settings-row input[type="number"] { padding: 0.5rem 0.75rem; border: 1px solid #d1d5db; border-radius: 0.375rem; font-size: 1rem; width: 150px; }
-          .settings-row button { padding: 0.5rem 1.25rem; background: #2563eb; color: white; border: none; border-radius: 0.375rem; font-size: 0.875rem; font-weight: 600; cursor: pointer; }
-          .settings-row button:hover { background: #1d4ed8; }
-          .msg { padding: 0.5rem 1rem; border-radius: 0.375rem; margin-bottom: 1rem; font-size: 0.875rem; }
-          .msg-ok { background: #dcfce7; color: #166534; }
-          .msg-err { background: #fee2e2; color: #991b1b; }
+          th, td { padding: 1.25rem 1.5rem; text-align: left; border-bottom: 1px solid var(--glass-border); }
+          th { font-weight: 600; color: var(--text-muted); text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.05em; }
+          tr { transition: background-color 0.2s ease; }
+          tr:hover { background: rgba(255, 255, 255, 0.03); }
+          
+          .badge { 
+            padding: 0.35rem 0.75rem; 
+            border-radius: 9999px; 
+            font-size: 0.75rem; 
+            font-weight: 600; 
+            letter-spacing: 0.05em;
+          }
+          .badge-matched { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+          .badge-error { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+          
+          .ticket-code {
+            font-family: monospace;
+            background: rgba(255,255,255,0.1);
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            color: #c084fc;
+          }
+
+          @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+          }
         </style>
       </head>
       <body>
         <div class="container">
           <div class="header">
-            <h1>LotteryBot Dashboard</h1>
-            <p>Real-time statistics for the Wavemart Lottery</p>
+            <h1>Wavemart Enterprise</h1>
+            <p>Live Secure Transaction Auditing & Lottery System</p>
           </div>
           
           <div class="stats-grid">
-            <div class="stat-card">
-              <div class="stat-value">${totalTx}</div>
-              <div class="stat-label">Total Tickets Issued</div>
+            <div class="stat-card glass-panel">
+              <div class="stat-value">${escapeHTML(totalTx)}</div>
+              <div class="stat-label">Verified Tickets Issued</div>
             </div>
-            <div class="stat-card">
-              <div class="stat-value">${totalAmount.toLocaleString()} ETB</div>
-              <div class="stat-label">Total Revenue</div>
+            <div class="stat-card glass-panel">
+              <div class="stat-value">${escapeHTML(totalAmount.toLocaleString())} ETB</div>
+              <div class="stat-label">Total Verified Revenue</div>
             </div>
           </div>
 
-          <div class="settings-card">
-            <h3>Settings</h3>
-            ${req.query.saved === '1' ? '<div class="msg msg-ok">Settings saved successfully.</div>' : ''}
-            ${req.query.error ? '<div class="msg msg-err">Invalid value. Please check your input.</div>' : ''}
-            <form method="POST" action="/settings">
-              <div class="settings-row">
-                <label for="amount">Lottery Amount (ETB)</label>
-                <input type="number" id="amount" name="amount" value="${currentAmount}" min="1" step="any" required>
-              </div>
-              <div class="settings-row" style="margin-top: 0.75rem;">
-                <label for="suffix">CBE Account Suffix</label>
-                <input type="text" id="suffix" name="cbe_account_suffix" value="${currentSuffix}" placeholder="8 digits" pattern="[0-9]{8}" maxlength="8" required>
-              </div>
-              <div class="settings-row" style="margin-top: 1rem;">
-                <button type="submit">Save</button>
-              </div>
-            </form>
-          </div>
-
-          <div class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Transaction Ref</th>
-                  <th>Sender</th>
-                  <th>Receiver</th>
-                  <th>Amount</th>
-                  <th>Match</th>
-                  <th>Lottery Ticket</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${secureTx.map(tx => `
+          <div class="glass-panel">
+            <div class="table-header">Recent Transactions</div>
+            <div class="table-container">
+              <table>
+                <thead>
                   <tr>
-                    <td><span style="font-family: monospace;">${tx.maskedFt}</span></td>
-                    <td>${tx.sender}</td>
-                    <td>${tx.receiver}</td>
-                    <td>${tx.amount} ETB</td>
-                    <td>${tx.settlementMatch ? '<span class="badge">Matched</span>' : '<span style="color: #dc2626; font-weight: 600;">Mismatch</span>'}</td>
-                    <td><strong>${tx.ticket}</strong></td>
+                    <th>Reference</th>
+                    <th>Sender</th>
+                    <th>Receiver</th>
+                    <th>Amount</th>
+                    <th>Security Match</th>
+                    <th>Issued Ticket</th>
                   </tr>
-                `).join('')}
-                ${secureTx.length === 0 ? '<tr><td colspan="6" style="text-align: center;">No transactions yet.</td></tr>' : ''}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  ${secureTx.map(tx => `
+                    <tr>
+                      <td><span style="font-family: monospace; color: #94a3b8;">${tx.maskedRef}</span></td>
+                      <td>${tx.sender}</td>
+                      <td>${tx.receiver} <br><span style="font-size: 0.75rem; color: #64748b;">${tx.receiverAccount}</span></td>
+                      <td style="font-weight: 600;">${tx.amount} ETB</td>
+                      <td>${tx.settlementMatch ? '<span class="badge badge-matched">VERIFIED</span>' : '<span class="badge badge-error">MISMATCH</span>'}</td>
+                      <td><span class="ticket-code">${tx.ticket}</span></td>
+                    </tr>
+                  `).join('')}
+                  ${secureTx.length === 0 ? '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 3rem;">No secure transactions processed yet.</td></tr>' : ''}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </body>
@@ -153,29 +235,6 @@ webApp.get('/', async (req, res) => {
   } catch (err) {
     console.error("Dashboard Error:", err);
     res.status(500).send("Internal Server Error");
-  }
-});
-
-webApp.use(express.urlencoded({ extended: false }));
-
-webApp.post('/settings', async (req, res) => {
-  try {
-    const amount = parseFloat(req.body.amount);
-    const suffix = req.body.cbe_account_suffix?.trim();
-    
-    if (isNaN(amount) || amount <= 0) {
-      return res.redirect('/?error=invalid');
-    }
-    if (!suffix || !/^\d{8}$/.test(suffix)) {
-      return res.redirect('/?error=invalid_suffix');
-    }
-    
-    await setSetting('lottery_amount', amount);
-    await setSetting('cbe_account_suffix', suffix);
-    res.redirect('/?saved=1');
-  } catch (err) {
-    console.error("Settings Error:", err);
-    res.redirect('/?error=1');
   }
 });
 
@@ -195,10 +254,6 @@ if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Regex to extract CBE FT transaction code
-const FT_REGEX = /\b(FT[A-Z0-9]{8,15})\b/;
-const CBE_DOMAIN = 'cbe.com.et';
-
 /**
  * Perform QR scan using jimp and jsqr.
  * @param {string} imagePath 
@@ -215,12 +270,8 @@ async function scanQRCode(imagePath) {
     
     const code = jsQR(imageData.data, imageData.width, imageData.height);
     if (code) {
-      console.log(`[SCANNER] QR Code Data:`, code.data);
-      if (code.data.includes(CBE_DOMAIN)) {
-        return code.data;
-      }
-    } else {
-      console.log(`[SCANNER] No QR Code found in image.`);
+      console.log(`[SCANNER] QR Code Data Found!`);
+      return code.data;
     }
   } catch (error) {
     console.error("Error in QR Scan:", error.message);
@@ -238,7 +289,7 @@ async function performOCR(imagePath) {
     const { data: { text } } = await Tesseract.recognize(imagePath, 'eng', {
       logger: m => {} // suppress logs
     });
-    console.log(`[SCANNER] OCR Raw Text:\n=== START ===\n${text}\n=== END ===`);
+    console.log(`[SCANNER] OCR extraction complete.`);
     return text;
   } catch (error) {
     console.error("Error in OCR:", error.message);
@@ -247,38 +298,26 @@ async function performOCR(imagePath) {
 }
 
 /**
- * Extract FT code from string.
- * @param {string} text 
- * @returns {string|null}
+ * Verifies the receipt using Verify.ET API in Universal Mode
+ * @param {string} referenceText - The raw text from OCR or QR
+ * @returns {Promise<{isValid: boolean, data: object, error: string}>}
  */
-function extractFTCode(text) {
-  const match = text.match(FT_REGEX);
-  return match ? match[1] : null;
-}
-
-/**
- * Verifies the receipt using Verify.ET API.
- * @param {string} ftCode 
- * @param {string} accountSuffix - 8-digit CBE account suffix
- * @returns {Promise<{isValid: boolean, data: object}>}
- */
-async function verifyWithVerifyET(ftCode, accountSuffix) {
+async function verifyWithVerifyET(referenceText) {
   try {
     const apiKey = process.env.VERIFY_ET_API_KEY;
     if (!apiKey && process.env.NODE_ENV !== 'test') {
       console.warn("WARNING: VERIFY_ET_API_KEY is not set!");
     }
 
-    const idempotencyKey = `lottery_${ftCode}_${Date.now()}`;
+    // Create a stable idempotency key based on the text hash to prevent double-charging the exact same image content
+    const hash = crypto.createHash('sha256').update(referenceText).digest('hex');
+    const idempotencyKey = `tx_${hash}`;
+    
     const payload = {
-      bank: "cbe",
-      referenceNumber: ftCode,
-      accountSuffix: accountSuffix
+      reference: referenceText
     };
 
-    console.log(`[VERIFY_ET] Verifying FT Code ${ftCode}...`);
-    console.log(`[VERIFY_ET] Payload:`, JSON.stringify(payload));
-    console.log(`[VERIFY_ET] API Key exists:`, !!apiKey);
+    console.log(`[VERIFY_ET] Sending Universal Verification Request...`);
     
     const response = await axios.post('https://verify.et/api/verify?waitMs=5000', payload, {
       headers: {
@@ -295,7 +334,7 @@ async function verifyWithVerifyET(ftCode, accountSuffix) {
     if (response.status === 202 || (body.verification && body.verification.processingStatus === 'queued')) {
       console.log(`[VERIFY_ET] Request queued (requestId: ${body.requestId}), polling...`);
       const requestId = body.requestId;
-      const pollAfterMs = body.links?.pollAfterMs || 1500;
+      const pollAfterMs = body.links?.pollAfterMs || 2000;
       
       for (let i = 0; i < 30; i++) {
         await new Promise(r => setTimeout(r, pollAfterMs));
@@ -313,59 +352,50 @@ async function verifyWithVerifyET(ftCode, accountSuffix) {
           const status = pollBody.data || pollBody.verification;
           
           if (status.processingStatus === 'completed' || status.processingStatus === 'failed') {
-            // Return the verification data from polling
-            const verificationResult = pollBody.verification || status;
-            return formatVerifyResult(verificationResult);
+            return formatVerifyResult(status.result || status);
           }
           
-          // Honor Retry-After header if present
           const retryAfter = pollRes.headers['retry-after'];
           if (retryAfter) {
             await new Promise(r => setTimeout(r, parseInt(retryAfter) * 1000));
           }
         } catch (pollErr) {
-          console.error(`[VERIFY_ET] Poll error (attempt ${i + 1}):`, pollErr.message);
           if (pollErr.response?.status === 429) {
             const retryAfter = pollErr.response.headers['retry-after'] || 5;
             await new Promise(r => setTimeout(r, parseInt(retryAfter) * 1000));
           }
         }
       }
-      return { isValid: false, data: null, error: 'Polling timed out', requestId };
+      return { isValid: false, data: null, error: 'Provider verification timed out.' };
     }
 
     // Handle immediate response (200)
     if (body.success && body.data && body.data.length > 0) {
       return formatVerifyResult(body.data[0]);
     }
-
-    // Debug: dump full response
-    console.log(`[VERIFY_ET] Response body:`, JSON.stringify(body, null, 2));
     
-    console.log(`[VERIFY_ET] ❌ Verification Failed:`, body.message);
-    return { isValid: false, data: null, error: body.message || JSON.stringify(body) };
+    return { isValid: false, data: null, error: body.message || 'Invalid receipt format.' };
   } catch (error) {
-    console.error("[VERIFY_ET] Full error:", JSON.stringify(error.response?.data || error.message, null, 2));
     if (error.response) {
-      // Handle specific error codes
       const errData = error.response.data;
-      const errorMsg = errData?.error?.message || errData?.message || JSON.stringify(errData);
+      const errorMsg = errData?.error?.message || errData?.message || 'Verification failed';
       if (errData?.error?.code === 'not_found') {
-        return { isValid: false, data: null, error: 'Transaction not found. Please verify the FT code and try again.' };
+        return { isValid: false, data: null, error: 'Transaction not found in the banking system.' };
       }
       if (errData?.error?.code === 'upstream_timeout') {
-        return { isValid: false, data: null, error: 'Verification timed out. Please try again.' };
+        return { isValid: false, data: null, error: 'Bank system timed out. Please try again later.' };
+      }
+      if (error.response.status === 409) {
+        return { isValid: false, data: null, error: 'This receipt was already submitted recently.' };
       }
       return { isValid: false, data: null, error: errorMsg };
     }
-    console.error("[VERIFY_ET] API connection error:", error.message);
-    return { isValid: false, data: null, error: 'Connection error. Please try again.' };
+    return { isValid: false, data: null, error: 'Secure connection error.' };
   }
 }
 
 /**
  * Format Verify.ET response into normalized structure
- * Handles both direct verification data and queued verification results
  */
 function formatVerifyResult(verificationData) {
   const settlementMatch = verificationData.settlementAccountMatch;
@@ -374,11 +404,12 @@ function formatVerifyResult(verificationData) {
   const result = {
     isValid: verificationData.verified === true,
     data: {
-      senderName: verificationData.senderName || '',
+      transactionRef: verificationData.referenceNumber || verificationData.receiptNumber || verificationData.requestId || crypto.randomUUID(),
+      senderName: verificationData.senderName || (verificationData.bankSpecific ? verificationData.bankSpecific.senderName : ''),
       receiverName: verificationData.receiverName || '',
-      receiverAccount: verificationData.receiverAccount || '',
+      receiverAccount: verificationData.receiverAccount || (verificationData.bankSpecific ? verificationData.bankSpecific.receiverAccount : ''),
       verifiedAmount: verificationData.amount || 0,
-      txTimestamp: verificationData.timestamp || '',
+      txTimestamp: verificationData.timestamp || new Date().toISOString(),
       settlementMatched: settlementMatch ? settlementMatch.matched === true : false,
       matchReason: settlementMatch ? settlementMatch.reason : '',
       status: verificationData.status || '',
@@ -387,88 +418,54 @@ function formatVerifyResult(verificationData) {
       confirmationCount: confirmationHistory ? confirmationHistory.confirmationCount || 0 : 0
     }
   };
-  
-  if (result.isValid) {
-    console.log(`[VERIFY_ET] ✅ Verification Successful`);
-    console.log(`[VERIFY_ET] Sender: ${result.data.senderName}`);
-    console.log(`[VERIFY_ET] Receiver: ${result.data.receiverName} (${result.data.receiverAccount})`);
-    console.log(`[VERIFY_ET] Amount: ${result.data.verifiedAmount} ${result.data.currency}`);
-    console.log(`[VERIFY_ET] Settlement Match: ${result.data.settlementMatched}`);
-    if (result.data.confirmedBefore) {
-      console.log(`[VERIFY_ET] ⚠️ Duplicate confirmation detected (count: ${result.data.confirmationCount})`);
-    }
-  } else {
-    console.log(`[VERIFY_ET] ❌ Verification Failed:`, verificationData.status);
-  }
-  
   return result;
+}
+
+// Telegram MarkdownV2 Escaping Helper
+function escMd(text) {
+  if (!text) return '';
+  return text.toString().replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
 /**
  * Core validation logic.
- * @param {string} imagePath 
- * @param {number} userId 
- * @returns {Promise<string>} User-facing response message
  */
 async function processReceipt(imagePath, userId) {
   try {
-    let ftCode = null;
-    let ocrText = null;
+    let extractedText = null;
 
-    // Step 1: QR Scan
-    const qrData = await scanQRCode(imagePath);
-    if (qrData) {
-      ftCode = extractFTCode(qrData);
+    // Step 1: Try QR Scan first
+    extractedText = await scanQRCode(imagePath);
+
+    // Step 2: Fallback to OCR if QR fails
+    if (!extractedText) {
+      extractedText = await performOCR(imagePath);
     }
 
-    // Step 2: OCR Fallback
-    if (!ftCode) {
-      ocrText = await performOCR(imagePath);
-      if (ocrText) {
-        ftCode = extractFTCode(ocrText);
-      }
-    }
-
-    if (!ftCode) {
-      return "Sorry, I couldn't find a valid CBE transaction reference (FT code) in the image.";
+    if (!extractedText || extractedText.trim() === '') {
+      return "🚫 *Error: Unreadable Image*\n\nI couldn't extract any text or QR code from that image\\. Please make sure it is a clear, uncropped screenshot of your bank receipt\\.";
     }
     
-    console.log(`[SCANNER] Extracted FT Code: ${ftCode}`);
-
-    // Step 3: Verify with Verify.ET API
-    const accountSuffix = await getSetting('cbe_account_suffix', '');
-    console.log(`[SCANNER] Account suffix from settings: "${accountSuffix}"`);
-    if (!accountSuffix) {
-      return "⚠️ CBE Account Suffix is not configured. Please set it in the dashboard settings.";
-    }
-
-    const verification = await verifyWithVerifyET(ftCode, accountSuffix);
-    
-    let responseMessage = `✅ Receipt Identified!\nFT Code: ${ftCode}\n`;
+    // Step 3: Throw raw text to Verify.et Universal Mode
+    const verification = await verifyWithVerifyET(extractedText);
     
     if (verification.isValid) {
       const vd = verification.data;
       
-      // Check for duplicate confirmation
+      // Strict Security: Duplicate check
       if (vd.confirmedBefore) {
-        responseMessage += `⚠️ Warning: This transaction has been confirmed before (${vd.confirmationCount} times).\n`;
+        return `⚠️ *Security Alert: Duplicate Receipt*\n\nThis transaction has already been confirmed and processed by our system\\.\n_Attempts are logged\\._`;
       }
       
-      // Check settlement match (receiver validation)
+      // Strict Security: Settlement Match check against Dashboard Registry
       if (!vd.settlementMatched) {
-        responseMessage += `⚠️ Warning: Receiver does not match expected account.\n`;
-        responseMessage += `   Received by: ${vd.receiverName} (${vd.receiverAccount})\n\n`;
+        return `⚠️ *Verification Failed: Unauthorized Deposit*\n\nThe transaction is valid, but the funds were *not* deposited into our registered settlement account\\.\n\n*Destination Detected:* ${escMd(vd.receiverName)} \\(${escMd(vd.receiverAccount)}\\)`;
       }
       
-      responseMessage += `👤 Sender: ${vd.senderName}\n`;
-      responseMessage += `🏦 Receiver: ${vd.receiverName} (${vd.receiverAccount})\n`;
-      responseMessage += `💰 Amount: ${vd.verifiedAmount} ${vd.currency}\n`;
-      responseMessage += `📅 Time: ${vd.txTimestamp}\n`;
-      responseMessage += `🔒 Settlement Match: ${vd.settlementMatched ? '✅ Yes' : '⚠️ No'}\n\n`;
-      
+      // Verification Passed securely!
       try {
         const ticket = generateTicket();
-        await insertTransaction(ftCode, userId, vd.verifiedAmount, ticket, {
+        await insertTransaction(vd.transactionRef, userId, vd.verifiedAmount, ticket, {
           senderName: vd.senderName,
           receiverName: vd.receiverName,
           receiverAccount: vd.receiverAccount,
@@ -476,29 +473,30 @@ async function processReceipt(imagePath, userId) {
           txTimestamp: vd.txTimestamp,
           settlementMatched: vd.settlementMatched
         });
-        responseMessage += `🎉 Success! Your payment was verified.\n🎫 Your Lottery Ticket: ${ticket}\n`;
+        
+        let responseMessage = `✅ *Payment Successfully Verified*\n\n`;
+        responseMessage += `👤 *Sender:* ${escMd(vd.senderName)}\n`;
+        responseMessage += `💰 *Amount:* ${escMd(vd.verifiedAmount)} ${escMd(vd.currency)}\n`;
+        responseMessage += `📅 *Date:* ${escMd(new Date(vd.txTimestamp).toLocaleString())}\n\n`;
+        responseMessage += `🎉 *Your Lottery Ticket:*\n\`${escMd(ticket)}\`\n\n`;
+        responseMessage += `_Thank you for participating\\! Keep this ticket code safe\\._`;
+        
+        return responseMessage;
       } catch (dbErr) {
-        if (dbErr.code === 'SQLITE_CONSTRAINT') {
-          responseMessage += `⚠️ Warning: This receipt (${ftCode}) has already been used to claim a ticket!\n`;
+        if (dbErr.code === 'SQLITE_CONSTRAINT' || dbErr.message.includes('E11000')) {
+          return `⚠️ *Duplicate Entry*\n\nThis exact transaction reference \\(${escMd(vd.transactionRef)}\\) has already been used to claim a ticket in our database\\!`;
         } else {
-          responseMessage += `❌ Internal Database Error while saving your ticket.\n`;
           console.error("DB Error:", dbErr);
+          return `❌ *System Error*\n\nYour receipt was verified, but a database error occurred while generating your ticket\\. Please contact support\\.`;
         }
       }
     } else {
-      responseMessage += `❌ Verification Failed: ${verification.error || 'Unknown error'}\n\n`;
-      responseMessage += `🔧 Debug Info:\n`;
-      responseMessage += `FT Code: ${ftCode}\n`;
-      responseMessage += `Account Suffix: ${accountSuffix}\n`;
-      responseMessage += `API Key Set: ${!!process.env.VERIFY_ET_API_KEY}\n`;
-      responseMessage += `Full Response: ${JSON.stringify(verification)}`;
+      return `❌ *Verification Failed*\n\n${escMd(verification.error)}\n\n_Please ensure the screenshot is genuine and clearly shows the transaction details\\._`;
     }
-
-    return responseMessage;
 
   } catch (err) {
     console.error("Error processing receipt:", err);
-    return "An internal error occurred while processing your receipt.";
+    return "❌ *Internal Error*\n\nAn unexpected error occurred while communicating with the bank servers\\. Please try again later\\.";
   }
 }
 
@@ -506,18 +504,14 @@ bot.on('photo', async (ctx) => {
   let localFilePath = null;
   try {
     const photos = ctx.message.photo;
-    // Telegram sends multiple sizes. The last one is the highest resolution.
     const highestResPhoto = photos[photos.length - 1];
     
-    // Get download link
     const fileLink = await ctx.telegram.getFileLink(highestResPhoto.file_id);
     
-    // Secure filename generation to prevent path traversal
-    const safeExt = path.extname(fileLink.href).split('?')[0]; // simple extension clean
+    const safeExt = path.extname(fileLink.href).split('?')[0]; 
     const tempFileName = crypto.randomUUID() + (safeExt || '.jpg');
     localFilePath = path.join(tempDir, tempFileName);
 
-    // Download image securely
     const response = await axios({
       url: fileLink.href,
       method: 'GET',
@@ -532,18 +526,19 @@ bot.on('photo', async (ctx) => {
       writer.on('error', reject);
     });
 
-    ctx.reply("Processing your receipt... Please wait.");
+    // Send professional waiting message
+    const msg = await ctx.reply("🔍 *Analyzing receipt\\.\\.\\.*\n_Communicating with secure banking endpoints\\._", { parse_mode: 'MarkdownV2' });
     
     const userId = ctx.from.id;
     const resultMsg = await processReceipt(localFilePath, userId);
     
-    ctx.reply(resultMsg);
+    // Update the message with the final result
+    await ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, resultMsg, { parse_mode: 'MarkdownV2' });
 
   } catch (error) {
     console.error(error);
-    ctx.reply("Sorry, an error occurred while downloading or processing your image.");
+    ctx.reply("❌ *Error*\n\nFailed to download or process your image\\. Please try again\\.", { parse_mode: 'MarkdownV2' });
   } finally {
-    // Strict cleanup of temp file
     if (localFilePath && fs.existsSync(localFilePath)) {
       try {
         fs.unlinkSync(localFilePath);
@@ -554,26 +549,23 @@ bot.on('photo', async (ctx) => {
   }
 });
 
+bot.command('start', (ctx) => {
+  ctx.reply("👋 *Welcome to Wavemart Lottery!*\n\nTo participate, simply upload a clear screenshot of your bank receipt \\(CBE, Telebirr, etc\\.\\)\\.\n\nOur secure system will automatically verify your payment and issue your lottery ticket\\!", { parse_mode: 'MarkdownV2' });
+});
+
 const WEB_PORT = process.env.PORT || 8080;
 
-// Start initialization if not in test env
 if (process.env.NODE_ENV !== 'test') {
-  // Initialize DB asynchronously. Mongoose automatically buffers queries until connected.
   initDb().catch(err => console.error("Failed to initialize database:", err));
   
-  // Start the bot
   bot.launch();
-  console.log("Telegram Bot started.");
+  console.log("Telegram Bot started in Secure Mode.");
   
-  // Start web server immediately in the main event loop. 
-  // This is CRITICAL for cPanel/Plesk (Phusion Passenger) to correctly intercept the port 
-  // and route standard HTTPS traffic directly to the dashboard without port 8080.
   webApp.listen(WEB_PORT, () => {
-    console.log("Web dashboard running on port " + WEB_PORT);
+    console.log("Web Enterprise dashboard running on port " + WEB_PORT);
   });
 }
 
-// Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
