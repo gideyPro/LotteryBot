@@ -302,7 +302,7 @@ async function performOCR(imagePath) {
  * @param {string} referenceText - The raw text from OCR or QR
  * @returns {Promise<{isValid: boolean, data: object, error: string}>}
  */
-async function verifyWithVerifyET(referenceText) {
+async function verifyWithVerifyET(referenceText, accountSuffix = null) {
   try {
     const apiKey = process.env.VERIFY_ET_API_KEY;
     if (!apiKey && process.env.NODE_ENV !== 'test') {
@@ -316,6 +316,11 @@ async function verifyWithVerifyET(referenceText) {
     const payload = {
       reference: referenceText
     };
+
+    const suffix = accountSuffix || process.env.ACCOUNT_SUFFIX;
+    if (suffix) payload.suffix = suffix;
+    if (process.env.PHONE_NUMBER) payload.phoneNumber = process.env.PHONE_NUMBER;
+    if (process.env.BANK) payload.bank = process.env.BANK;
 
     console.log(`[VERIFY_ET] Sending Universal Verification Request...`);
     
